@@ -12,11 +12,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using MQTTnet.Implementations;
 using MQTTnet.Internal;
+using MQTTnet.Server.Endpoints;
 
 namespace MQTTnet.Server
 {
     public class MqttServer : Disposable, IMqttServer
     {
+        readonly List<MqttServerEndpointAdapter> _endpointAdapters = new List<MqttServerEndpointAdapter>();
         readonly MqttServerEventDispatcher _eventDispatcher;
         readonly ICollection<IMqttServerAdapter> _adapters;
         readonly IMqttNetLogger _rootLogger;
@@ -153,21 +155,36 @@ namespace MQTTnet.Server
             Options = options ?? throw new ArgumentNullException(nameof(options));
             
             _cancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = _cancellationTokenSource.Token;
 
-            _retainedMessagesManager = Options.RetainedMessagesManager ?? throw new MqttConfigurationException("options.RetainedMessagesManager should not be null.");
+            _retainedMessagesManager = Options.RetainedMessagesManager ?? throw new MqttConfigurationException("options.RetainedMessagesManager must not be null.");
 
             await _retainedMessagesManager.Start(Options, _rootLogger).ConfigureAwait(false);
             await _retainedMessagesManager.LoadMessagesAsync().ConfigureAwait(false);
 
-            _clientSessionsManager = new MqttClientSessionsManager(Options, _retainedMessagesManager, _cancellationTokenSource.Token, _eventDispatcher, _rootLogger);
-            _clientSessionsManager.Start();
+            _clientSessionsManager = new MqttClientSessionsManager(Options, _retainedMessagesManager, _eventDispatcher, _rootLogger);
+            _clientSessionsManager.Start(cancellationToken);
 
-            foreach (var adapter in _adapters)
+            if (options.Endpoints.Any())
             {
-                adapter.ClientHandler = OnHandleClient;
-                await adapter.StartAsync(Options).ConfigureAwait(false);
+                foreach (var endpoint in options.Endpoints)
+                {
+                    var endpointAdapter = new MqttServerEndpointAdapter(endpoint, c => _clientSessionsManager.HandleClientConnectionAsync(c, cancellationToken), options, _rootLogger);
+                    endpointAdapter.Start(cancellationToken);
+                    _endpointAdapters.Add(endpointAdapter);
+                }
             }
+            else
+            {
+                foreach (var adapter in _adapters)
+                {
+                    adapter.ClientHandler = c =>
+                        _clientSessionsManager.HandleClientConnectionAsync(c, cancellationToken);
 
+                    await adapter.StartAsync(Options).ConfigureAwait(false);
+                }
+            }
+            
             _logger.Info("Started.");
 
             var startedHandler = StartedHandler;
@@ -195,6 +212,13 @@ namespace MQTTnet.Server
                     adapter.ClientHandler = null;
                     await adapter.StopAsync().ConfigureAwait(false);
                 }
+
+                foreach (var endpointAdapter in _endpointAdapters)
+                {
+                    endpointAdapter.Dispose();
+                }
+
+                _endpointAdapters.Clear();
 
                 _logger.Info("Stopped.");
             }
@@ -230,12 +254,7 @@ namespace MQTTnet.Server
 
             base.Dispose(disposing);
         }
-
-        Task OnHandleClient(IMqttChannelAdapter channelAdapter)
-        {
-            return _clientSessionsManager.HandleClientConnectionAsync(channelAdapter);
-        }
-
+        
         void ThrowIfStarted()
         {
             if (_cancellationTokenSource != null)

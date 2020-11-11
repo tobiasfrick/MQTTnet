@@ -4,6 +4,7 @@ using MQTTnet.Certificates;
 
 namespace MQTTnet.Server
 {
+    [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
     public class MqttServerTlsTcpEndpointOptions : MqttServerTcpEndpointBaseOptions
     {
         ICertificateProvider _certificateProvider;

@@ -1,9 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
+using MQTTnet.Server.Endpoints;
 
 namespace MQTTnet.Server
 {
     public interface IMqttServerOptions
     {
+        List<IMqttServerEndpoint> Endpoints { get; }
+
         string ClientId { get; set; }
 
         bool EnablePersistentSessions { get; }
@@ -19,7 +23,10 @@ namespace MQTTnet.Server
         IMqttServerApplicationMessageInterceptor ApplicationMessageInterceptor { get; }
         IMqttServerClientMessageQueueInterceptor ClientMessageQueueInterceptor { get; }
 
+        [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
         MqttServerTcpEndpointOptions DefaultEndpointOptions { get; }
+
+        [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
         MqttServerTlsTcpEndpointOptions TlsEndpointOptions { get; }
 
         IMqttServerStorage Storage { get; }

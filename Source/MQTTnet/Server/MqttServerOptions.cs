@@ -1,11 +1,17 @@
 ﻿using System;
+using System.Collections.Generic;
+using MQTTnet.Server.Endpoints;
 
 namespace MQTTnet.Server
 {
     public class MqttServerOptions : IMqttServerOptions
     {
+        public List<IMqttServerEndpoint> Endpoints { get; } = new List<IMqttServerEndpoint>();
+
+        [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
         public MqttServerTcpEndpointOptions DefaultEndpointOptions { get; } = new MqttServerTcpEndpointOptions();
 
+        [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
         public MqttServerTlsTcpEndpointOptions TlsEndpointOptions { get; } = new MqttServerTlsTcpEndpointOptions();
 
         public string ClientId { get; set; }

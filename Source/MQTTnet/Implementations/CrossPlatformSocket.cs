@@ -62,7 +62,7 @@ namespace MQTTnet.Implementations
             get => (int)_socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) != 0;
             set => _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, value ? 1 : 0);
         }
-
+        
         public async Task<CrossPlatformSocket> AcceptAsync()
         {
             try

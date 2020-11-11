@@ -1,7 +1,9 @@
-﻿using System.Net;
+﻿using System;
+using System.Net;
 
 namespace MQTTnet.Server
 {
+    [Obsolete("Please use _Endpoints_ instead. This will be removed soon.")]
     public abstract class MqttServerTcpEndpointBaseOptions
     {
         public bool IsEnabled { get; set; }
