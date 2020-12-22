@@ -777,7 +777,7 @@ namespace MQTTnet.Tests
                 await Task.Delay(500);
 
                 var message = new MqttApplicationMessageBuilder().WithTopic("topic1").WithPayload("Hello World").WithExactlyOnceQoS().WithRetainFlag().Build();
-                
+
                 await client2.PublishAsync(message);
                 await Task.Delay(500);
 
@@ -785,6 +785,150 @@ namespace MQTTnet.Tests
                 Assert.IsTrue(client1.IsConnected);
                 Assert.IsFalse(disconnectedFired);
             }
+        }
+
+        [TestMethod]
+        public async Task Server_Disconnect_During_Connect()
+        {
+            var random = new Random();
+            var cancellationToken = new CancellationTokenSource();
+
+            var lastServerRestart = DateTimeOffset.Now;
+            var lastReconnect = DateTimeOffset.Now;
+            var lastConnectionCheck = DateTimeOffset.Now;
+
+            var serverOptions = new MqttServerOptionsBuilder()
+                .WithPersistentSessions()
+                .WithDefaultEndpointPort(1888)
+                .Build();
+            var server = new MqttFactory().CreateMqttServer();
+
+            // The server restarts after a random delay when a client connects
+            var clientConnectCount = 0;
+            server.UseClientConnectedHandler((e) =>
+            {
+                try
+                {
+                    clientConnectCount++;
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(random.Next(0, 50), cancellationToken.Token);
+                        lastServerRestart = DateTimeOffset.Now;
+                        await server.StopAsync();
+                        await server.StartAsync(serverOptions);
+                    }, cancellationToken.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            });
+            await server.StartAsync(serverOptions);
+
+            var client = new MqttFactory().CreateMqttClient();
+            var statusMessage = new MqttApplicationMessage
+            {
+                Retain = true,
+                Payload = new byte[] { 3, 4 },
+                QualityOfServiceLevel = MqttQualityOfServiceLevel.AtLeastOnce,
+                Topic = "status"
+            };
+            var clientOptions = new MqttClientOptionsBuilder()
+                .WithCleanSession(false)
+                .WithWillMessage(statusMessage)
+                .WithKeepAlivePeriod(TimeSpan.FromSeconds(2))
+                .WithCommunicationTimeout(TimeSpan.FromSeconds(2))
+                .WithTcpServer("127.0.0.1", 1888)
+                .Build();
+
+            client.UseApplicationMessageReceivedHandler(e =>
+            {
+                if (e.ApplicationMessage.Topic == "status")
+                {
+                    lastReconnect = DateTimeOffset.Now;
+                }
+            });
+
+            // the client tries to reconnect to the server in a loop
+            new Thread(async () =>
+            {
+                try
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(1000), cancellationToken.Token);
+                        lastConnectionCheck = DateTimeOffset.Now;
+                        if (client.IsConnected)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            await client.DisconnectAsync(new MqttClientDisconnectOptions(), cancellationToken.Token).ConfigureAwait(false);
+                            lastReconnect = DateTimeOffset.Now;
+                            await client.ConnectAsync(clientOptions, cancellationToken.Token);
+                            await client.SubscribeAsync("status", MqttQualityOfServiceLevel.AtLeastOnce);
+                            await client.PublishAsync(statusMessage);
+                            continue;
+                        }
+                        catch (MqttCommunicationTimedOutException) { }
+                        catch (MqttCommunicationException) { }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex)
+                        {
+                            Assert.Fail(ex.ToString());
+                        }
+
+                        if (cancellationToken.IsCancellationRequested)
+                            break;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }).Start();
+
+            // simulate high CPU load
+            var threadCount = Environment.ProcessorCount + 2;
+            for (int i = 0; i < threadCount; i++)
+            {
+                new Thread(() =>
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                    }
+                }).Start();
+            }
+
+            // check if the client is still reconnecting continuously, if not fail the test
+            var startTime = DateTimeOffset.Now;
+            var testDuration = TimeSpan.FromMinutes(3);
+            while (true)
+            {
+                await Task.Delay(1000);
+
+                if (lastReconnect < DateTimeOffset.Now.Subtract(TimeSpan.FromSeconds(40)) && 
+                    lastServerRestart < DateTimeOffset.Now.Subtract(TimeSpan.FromSeconds(40)))
+                {
+                    Assert.IsTrue(clientConnectCount > 0, "Client never connected to server!");
+                    Assert.IsTrue(lastConnectionCheck > DateTimeOffset.Now.Subtract(TimeSpan.FromSeconds(5)),
+                        "Did not check client connection state within the last 5 seconds");
+                    Assert.IsTrue(server.IsStarted);
+                    Assert.IsTrue(lastServerRestart > lastReconnect);
+                    Assert.IsTrue((await server.GetClientStatusAsync()).Count == 0, "No clients should be connected to the server at this point");
+                    Assert.IsFalse(client.IsConnected, "The client should not be connected at this point");
+                    // Fail the test because we should never enter this state
+                    Assert.Fail();
+                }
+
+                if (startTime < DateTimeOffset.Now.Subtract(testDuration))
+                    break;
+            }
+
+            Assert.IsTrue(clientConnectCount > 0, "Client never connected to server!");
+            Assert.IsTrue(lastConnectionCheck > DateTimeOffset.Now.Subtract(TimeSpan.FromSeconds(5)),
+                "Did not check client connection state within the last 5 seconds");
+            cancellationToken.Cancel();
         }
     }
 }
